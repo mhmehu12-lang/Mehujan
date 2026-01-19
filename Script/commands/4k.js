@@ -1,71 +1,66 @@
 const axios = require('axios');
-const fs = require('fs');
+const fs = require('fs-extra');
+const path = require('path');
 
-module.exports = {
-  config: {
-    name: "4k",
-    version: "1.0.0",
-    hasPermssion: 0,
-    credits: "SHAHADAT SAHU", //don't change credit
-    description: "Enhance Photo - Reply with image to upscale",
-    commandCategory: "Image Editing Tools",
-    usages: "Reply to an image",
-    cooldowns: 5
-  },
-
-  handleEvent: async ({ api, event }) => {
-    const { body, messageReply, threadID, messageID } = event;
-    if (body?.toLowerCase().trim() === "4k") {
-      if (!messageReply?.attachments?.length)
-        return api.sendMessage("📸 Please reply to an image!", threadID, messageID);
-
-      await processImage(api, threadID, messageID, messageReply);
-    }
-  },
-
-  run: async ({ api, event }) => {
-    const { threadID, messageID, messageReply } = event;
-    if (!messageReply?.attachments?.length)
-      return api.sendMessage("📸 Reply to an image to enhance!", threadID, messageID);
-
-    await processImage(api, threadID, messageID, messageReply);
-  }
+module.exports.config = {
+  name: "4k",
+  version: "1.0.1",
+  hasPermssion: 0,
+  credits: "SHAHADAT SAHU",
+  description: "Enhance Photo - Reply to an image to upscale",
+  commandCategory: "Image Editing Tools",
+  usages: "Reply to an image",
+  cooldowns: 5
 };
 
-async function processImage(api, threadID, messageID, messageReply) {
-  const tempPath = __dirname + "/cache/4k.jpg";
-  const img = messageReply.attachments[0].url;
+module.exports.run = async ({ api, event }) => {
+  const { threadID, messageID, messageReply, type } = event;
+
+  // চেক করা হচ্ছে রিপ্লাই দেওয়া হয়েছে কি না এবং সেটি ফটো কি না
+  if (type !== "message_reply" || !messageReply.attachments || messageReply.attachments[0].type !== "photo") {
+    return api.sendMessage("📸 Please reply to an image to enhance it!", threadID, messageID);
+  }
+
+  const cacheDir = path.join(__dirname, "cache");
+  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  const tempPath = path.join(cacheDir, `4k_${Date.now()}.jpg`);
+
+  const imgUrl = messageReply.attachments[0].url;
 
   try {
-    const configUrl =
-      "https://raw.githubusercontent.com/shahadat-sahu/SAHU-API/refs/heads/main/SAHU-API.json";
+    const wait = await api.sendMessage("⏳ Enhancing your photo in 4K... Please wait.", threadID);
 
+    // API URL কনফিগ ফাইল থেকে আনা
+    const configUrl = "https://raw.githubusercontent.com/shahadat-sahu/SAHU-API/refs/heads/main/SAHU-API.json";
     const apiConfig = await axios.get(configUrl);
     const apiUrl = apiConfig.data["4k"];
 
-    const wait = await api.sendMessage("⏳ Enhancing your photo in 4K...", threadID);
+    if (!apiUrl) throw new Error("API URL not found in config");
 
-    const enhanceUrl = `${apiUrl}?imageUrl=${encodeURIComponent(img)}`;
+    // ইমেজ এনহ্যান্স করা
+    const enhanceUrl = `${apiUrl}?imageUrl=${encodeURIComponent(imgUrl)}`;
     const res = await axios.get(enhanceUrl);
     const resultImg = res.data?.result;
 
-    if (!resultImg) throw new Error("No result");
+    if (!resultImg) throw new Error("Enhanced image URL not found");
 
-    const buffer = (await axios.get(resultImg, { responseType: "arraybuffer" })).data;
-    fs.writeFileSync(tempPath, Buffer.from(buffer, "binary"));
+    // ইমেজ ডাউনলোড করা
+    const imageResponse = await axios.get(resultImg, { responseType: "arraybuffer" });
+    fs.writeFileSync(tempPath, Buffer.from(imageResponse.data, "binary"));
 
-    api.sendMessage(
-      {
-        body: "✔️ 4K Enhance Successful!",
-        attachment: fs.createReadStream(tempPath)
-      },
-      threadID,
-      () => fs.unlinkSync(tempPath),
-      messageID
-    );
+    // মেসেজ পাঠানো
+    await api.sendMessage({
+      body: "✔️ 4K Enhance Successful!",
+      attachment: fs.createReadStream(tempPath)
+    }, threadID, () => {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    }, messageID);
 
-    api.unsendMessage(wait.messageID);
+    // লোডিং মেসেজ আনসেন্ড করা
+    return api.unsendMessage(wait.messageID);
+
   } catch (e) {
-    api.sendMessage("❌ API Error! Boss SAHU ke message din!", threadID, messageID);
+    console.error(e);
+    return api.sendMessage("❌ API Error! Please try again later or contact the developer.", threadID, messageID);
   }
-}
+};
